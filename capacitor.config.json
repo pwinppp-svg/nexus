@@ -1,0 +1,9 @@
+{
+  "appId": "com.nexusai.mobile",
+  "appName": "NEXUS AI",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  }
+}

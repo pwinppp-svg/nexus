@@ -1,0 +1,28 @@
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import OpenAI from 'openai';
+import multer from 'multer';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import pdf from 'pdf-parse/lib/pdf-parse.js';
+import mammoth from 'mammoth';
+
+dotenv.config();
+const app=express(); const port=process.env.PORT||3001;
+const __dirname=path.dirname(fileURLToPath(import.meta.url));
+const uploadDir=path.join(__dirname,'uploads'); fs.mkdirSync(uploadDir,{recursive:true});
+app.use(cors()); app.use(express.json({limit:'20mb'}));
+const storage=multer.diskStorage({destination:(_,__,cb)=>cb(null,uploadDir),filename:(_,file,cb)=>cb(null,Date.now()+'-'+file.originalname.replace(/[^a-zA-Z0-9._-]/g,'_'))});
+const upload=multer({storage,limits:{fileSize:15*1024*1024,files:5},fileFilter:(_,f,cb)=>{const ok=/\.(png|jpe?g|webp|gif|pdf|txt|csv|json|docx)$/i.test(f.originalname); cb(ok?null:new Error('Format file belum didukung.'),ok);}});
+const ai=()=>{if(!process.env.OPENAI_API_KEY) throw new Error('API key belum diatur. Isi OPENAI_API_KEY di file .env.'); return new OpenAI({apiKey:process.env.OPENAI_API_KEY});};
+app.get('/api/health',(_,res)=>res.json({ok:true,configured:Boolean(process.env.OPENAI_API_KEY)}));
+app.post('/api/chat',async(req,res)=>{try{const {messages=[]}=req.body; const response=await ai().chat.completions.create({model:'gpt-4o-mini',messages:[{role:'system',content:'Kamu adalah NEXUS AI, asisten AI yang membantu, jelas, dan berbahasa Indonesia kecuali diminta lain.'},...messages],temperature:0.7});res.json({reply:response.choices[0]?.message?.content||'Tidak ada jawaban.'});}catch(e){res.status(500).json({error:e.message});}});
+app.post('/api/analyze-image',upload.single('image'),async(req,res)=>{try{if(!req.file)return res.status(400).json({error:'Pilih gambar terlebih dahulu.'});const b=fs.readFileSync(req.file.path);const mime=req.file.mimetype||'image/jpeg';const data=`data:${mime};base64,${b.toString('base64')}`;const out=await ai().chat.completions.create({model:'gpt-4o-mini',messages:[{role:'user',content:[{type:'text',text:req.body.prompt||'Jelaskan isi gambar ini secara detail dan objektif.'},{type:'image_url',image_url:{url:data}}]}]});res.json({reply:out.choices[0]?.message?.content||'Tidak ada hasil.'});}catch(e){res.status(500).json({error:e.message});}});
+app.post('/api/generate-image',async(req,res)=>{try{const {prompt}=req.body;if(!prompt)return res.status(400).json({error:'Deskripsi gambar wajib diisi.'});const out=await ai().images.generate({model:'gpt-image-1',prompt,size:'1024x1024'});res.json({image:`data:image/png;base64,${out.data[0].b64_json}`});}catch(e){res.status(500).json({error:e.message});}});
+app.post('/api/upload',upload.array('files',5),async(req,res)=>{try{const results=[];for(const f of req.files||[]){let extracted='';if(f.mimetype==='application/pdf'){const d=await pdf(fs.readFileSync(f.path));extracted=d.text.slice(0,30000);}else if(f.originalname.toLowerCase().endsWith('.docx')){const d=await mammoth.extractRawText({path:f.path});extracted=d.value.slice(0,30000);}else if(/\.(txt|csv|json)$/i.test(f.originalname)){extracted=fs.readFileSync(f.path,'utf8').slice(0,30000);}results.push({name:f.originalname,size:f.size,type:f.mimetype,text:extracted,url:`/api/uploads/${path.basename(f.path)}`});}res.json({files:results});}catch(e){res.status(500).json({error:e.message});}});
+app.use('/api/uploads',express.static(uploadDir));
+app.use(express.static(path.join(__dirname,'../dist')));
+app.get('*',(req,res)=>{const index=path.join(__dirname,'../dist/index.html');if(fs.existsSync(index))res.sendFile(index);else res.status(404).send('Jalankan aplikasi dalam mode development di http://localhost:5173');});
+app.listen(port,()=>console.log(`NEXUS AI API berjalan di http://localhost:${port}`));
